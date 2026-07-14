@@ -36,6 +36,10 @@ cmake_args=(
   -DOPENCV_GENERATE_PKGCONFIG=OFF
   -DOPENCV_ENABLE_NONFREE=OFF
   -DENABLE_PIC=ON
+  # G-API's init hook creates and exports the optional ADE target before
+  # BUILD_LIST disables G-API. With ADE left enabled, the generated package
+  # references an archive that an EXCLUDE_FROM_ALL build never creates.
+  -DWITH_ADE=OFF
   -DWITH_1394=OFF
   -DWITH_CUDA=OFF
   -DWITH_EIGEN=OFF

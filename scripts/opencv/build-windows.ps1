@@ -32,6 +32,8 @@ $ConfigureArgs = @(
   "-DBUILD_PACKAGE=OFF",
   "-DOPENCV_GENERATE_PKGCONFIG=OFF",
   "-DOPENCV_ENABLE_NONFREE=OFF",
+  # G-API's init hook otherwise exports an unbuilt EXCLUDE_FROM_ALL ADE target.
+  "-DWITH_ADE=OFF",
   "-DWITH_1394=OFF",
   "-DWITH_CUDA=OFF",
   "-DWITH_EIGEN=OFF",
@@ -58,8 +60,11 @@ $ConfigureArgs = @(
 )
 
 cmake @ConfigureArgs
-cmake --build $BuildDir --config MinSizeRel --parallel $env:NUMBER_OF_PROCESSORS
-cmake --install $BuildDir --config MinSizeRel
+# OpenCV intentionally limits Visual Studio projects to Debug and Release.
+# Requesting MinSizeRel produces MSB8013 because that project configuration
+# does not exist, so use the optimized Release configuration consistently.
+cmake --build $BuildDir --config Release --parallel $env:NUMBER_OF_PROCESSORS
+cmake --install $BuildDir --config Release
 
 $OpenCvConfig = Get-ChildItem -Path $InstallDir -Filter OpenCVConfig.cmake -Recurse | Select-Object -First 1
 if (-not $OpenCvConfig) {
@@ -72,5 +77,5 @@ cmake `
   -A x64 `
   "-DOpenCV_DIR=$($OpenCvConfig.Directory.FullName)" `
   -DOpenCV_STATIC=ON
-cmake --build $SmokeBuildDir --config MinSizeRel --parallel $env:NUMBER_OF_PROCESSORS
-ctest --test-dir $SmokeBuildDir -C MinSizeRel --output-on-failure
+cmake --build $SmokeBuildDir --config Release --parallel $env:NUMBER_OF_PROCESSORS
+ctest --test-dir $SmokeBuildDir -C Release --output-on-failure

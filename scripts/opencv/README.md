@@ -19,5 +19,11 @@ The two macOS artifacts are intentionally separate so a later Tauri universal
 build can link each Rust target against the matching OpenCV architecture before
 combining the final application binaries.
 
+Unix builds use the single-config `MinSizeRel` mode. OpenCV's Visual Studio
+projects expose only `Debug` and `Release`, so Windows uses the optimized
+`Release` configuration. `WITH_ADE` is explicitly disabled on every platform:
+G-API is outside this minimal module set, and leaving its initialization hook
+enabled would export an unbuilt `ade` archive into `OpenCVModules.cmake`.
+
 To update OpenCV, change both `OPENCV_VERSION` and the full peeled commit SHA in
 `.github/workflows/opencv-static.yml`.
