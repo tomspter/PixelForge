@@ -5,6 +5,8 @@
 - Vue 只负责模板编辑、即时预览、交互状态；Rust 是最终 PNG/JPG 输出的唯一可信实现。
 - 模板坐标永远是原图像素。Konva Stage 只通过整体 `scale` 显示缩放，字段模型不保存屏幕坐标。
 - `eraseRect` 与 `layoutRect` 独立建模。前者确保完全盖住旧内容，后者只负责新文字排版。
+- 字段旋转默认关闭；启用后以 `layoutRect` 中心为统一旋转轴，文字、`eraseRect` 和背景补丁共享同一角度。
+- `fields` 按从底层到顶层保存和渲染；字段列表反向展示，因此列表顶部始终代表视觉最上层，拖动排序直接更新最终合成顺序。
 - 背景、遮罩、文字、交互四层隔离，导出不包含 Interaction Layer。
 - JSON 带 `schemaVersion`，后续增加图片字段、二维码或多行排版时可迁移而不破坏旧模板。
 
@@ -31,12 +33,17 @@
 
 | 模式 | 适用场景 | 实现 |
 |---|---|---|
-| `inpaint` | 扫描件中的深色文字，默认推荐 | 局部背景差分生成文字掩码，仅对笔画像素做邻域修补 |
-| `patch` | 固定纹理模板，推荐 | 补丁缩放到 `eraseRect` 后覆盖 |
+| `inpaint` | 扫描件中的深色文字，默认推荐 | `clear_inpaint.rs`：局部背景差分生成文字掩码，仅对笔画像素做邻域修补 |
+| `telea` | 纹理背景中的深色文字或小瑕疵 | `clear_telea.rs`：独立生成文字形状掩码，调用 Rust `inpaint` crate 的 Telea 算法修复 |
+| `patch` | 固定纹理模板，推荐 | `clear_patch.rs`：补丁缩放到 `eraseRect` 后覆盖 |
 
 所有策略都从 pristine 背景取样，避免前一个字段的修改污染后续字段。
 
-智能抹除的 `inpaintThreshold` 越低，进入掩码的深色像素越多；`inpaintRadius` 用于覆盖文字边缘的抗锯齿。该模式无法在没有语义信息的情况下区分文字与穿过画框的表格线，因此画框应尽量只包住原文字。
+智能抹除独立使用 `inpaintThreshold` 和 `inpaintRadius`：阈值越低，进入掩码的深色像素越多；半径用于覆盖文字边缘的抗锯齿。该模式无法在没有语义信息的情况下区分文字与穿过画框的表格线，因此画框应尽量只包住原文字。
+
+`telea` 模式独立使用 `teleaThreshold` 检测深色文字、使用 `teleaMaskRadius`（0–12）扩张文字掩码，并将 `teleaRadius`（1–100）作为 Telea 算法的采样半径传给 Rust `inpaint` crate。它不会再把整个 `eraseRect` 清空，因此未进入文字掩码的背景像素保持原值。
+
+三种清除策略分别位于 `clear_inpaint.rs`、`clear_telea.rs` 和 `clear_patch.rs`；`lib.rs` 只负责 Tauri 命令、区域裁剪与策略路由。
 
 ## 5. 模板 JSON 示例
 
@@ -51,6 +58,8 @@
     "csvColumn": "name",
     "eraseRect": { "x": 720, "y": 1320, "width": 1040, "height": 180 },
     "layoutRect": { "x": 760, "y": 1340, "width": 960, "height": 140 },
+    "rotationEnabled": false,
+    "rotation": 0,
     "text": { "fontFamily": "宋体", "fontSize": 72, "color": "#181818", "horizontalAlign": "center", "verticalAlign": "middle", "lineHeight": 1.2, "letterSpacing": 0, "padding": 4 },
     "clear": { "mode": "patch", "color": "#ffffff", "patchPath": "/templates/patches/name.png" },
     "enabled": true
@@ -58,6 +67,8 @@
   "createdAt": "2026-07-12T10:00:00Z", "updatedAt": "2026-07-12T10:00:00Z"
 }
 ```
+
+`rotation` 使用顺时针角度，规范范围为 `-180` 到 `180`。这两个属性采用向后兼容的默认值，因此旧模板无需修改即可继续打开。
 
 ## 6. 扩展建议
 

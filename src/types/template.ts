@@ -1,5 +1,5 @@
 export type FieldKind = 'fixed' | 'csv' | 'random' | 'date'
-export type ClearMode = 'inpaint' | 'patch'
+export type ClearMode = 'inpaint' | 'telea' | 'patch'
 export type HAlign = 'left' | 'center' | 'right'
 export type VAlign = 'top' | 'middle' | 'bottom'
 
@@ -19,6 +19,9 @@ export interface ClearStrategy {
   patchPath?: string
   inpaintThreshold?: number
   inpaintRadius?: number
+  teleaThreshold?: number
+  teleaMaskRadius?: number
+  teleaRadius?: number
 }
 export interface TemplateField {
   id: string
@@ -34,6 +37,8 @@ export interface TemplateField {
   randomDecimals?: number
   eraseRect: Rect
   layoutRect: Rect
+  rotationEnabled: boolean
+  rotation: number
   text: TextStyle
   clear: ClearStrategy
   enabled: boolean
@@ -51,6 +56,7 @@ export interface TemplateDocument {
 export const makeField = (rect: Rect, index: number): TemplateField => ({
   id: crypto.randomUUID(), name: `字段 ${index}`, kind: 'fixed', value: '示例文本', dateValue: '', timeValue: '', dateFormat: 'YYYY-MM-DD HH:mm',
   eraseRect: { ...rect }, layoutRect: { ...rect },
+  rotationEnabled: false, rotation: 0,
   text: { fontFamily: 'Arial', fontSize: Math.max(12, Math.round(rect.height * .56)), color: '#161916', horizontalAlign: 'center', verticalAlign: 'middle', lineHeight: 1.2, letterSpacing: 0, padding: 4 },
-  clear: { mode: 'inpaint', inpaintThreshold: 5, inpaintRadius: 5 }, enabled: true,
+  clear: { mode: 'inpaint', inpaintThreshold: 5, inpaintRadius: 5, teleaThreshold: 14, teleaMaskRadius: 1, teleaRadius: 3 }, enabled: true,
 })

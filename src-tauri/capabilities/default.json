@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Editor window permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "fs:default", "notification:default", "shell:allow-open"]
+  "permissions": ["core:default", "core:window:allow-set-theme", "dialog:allow-open", "dialog:allow-save", "fs:default", "notification:default", "shell:allow-open"]
 }
