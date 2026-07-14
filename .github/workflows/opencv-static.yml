@@ -1,0 +1,137 @@
+name: Build minimal OpenCV static libraries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencv-static-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OPENCV_VERSION: 4.13.0
+  OPENCV_COMMIT: fe38fc608f6acb8b68953438a62305d8318f4fcd
+  OPENCV_MODULES: core,imgproc,photo
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-2022
+            platform: windows
+            target: x86_64-pc-windows-msvc
+            artifact: opencv-min-windows-x86_64
+
+          - name: Linux x64
+            runner: ubuntu-22.04
+            platform: unix
+            target: x86_64-unknown-linux-gnu
+            artifact: opencv-min-linux-x86_64
+
+          - name: macOS ARM64
+            runner: macos-15
+            platform: unix
+            target: aarch64-apple-darwin
+            cmake-arch: arm64
+            artifact: opencv-min-macos-aarch64
+
+          - name: macOS Intel
+            runner: macos-15-intel
+            platform: unix
+            target: x86_64-apple-darwin
+            cmake-arch: x86_64
+            artifact: opencv-min-macos-x86_64
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out PixelForge
+        uses: actions/checkout@v4
+
+      - name: Check out pinned OpenCV source
+        uses: actions/checkout@v4
+        with:
+          repository: opencv/opencv
+          ref: ${{ env.OPENCV_COMMIT }}
+          path: .opencv-src
+          fetch-depth: 1
+
+      - name: Verify OpenCV source revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C .opencv-src rev-parse HEAD)"
+          test "$actual" = "$OPENCV_COMMIT"
+          echo "OpenCV $OPENCV_VERSION ($actual)"
+
+      - name: Set up Python for cross-platform packaging
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux build tools
+        if: matrix.platform == 'unix' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Build and test static OpenCV on Unix
+        if: matrix.platform == 'unix'
+        shell: bash
+        env:
+          OPENCV_TARGET: ${{ matrix.target }}
+          OPENCV_CMAKE_ARCH: ${{ matrix.cmake-arch }}
+        run: |
+          scripts/opencv/build-unix.sh \
+            "$GITHUB_WORKSPACE/.opencv-src" \
+            "$RUNNER_TEMP/opencv-build" \
+            "$RUNNER_TEMP/opencv-install" \
+            "$RUNNER_TEMP/opencv-smoke"
+
+      - name: Build and test static OpenCV on Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          OPENCV_TARGET: ${{ matrix.target }}
+        run: |
+          ./scripts/opencv/build-windows.ps1 `
+            -SourceDir "$env:GITHUB_WORKSPACE/.opencv-src" `
+            -BuildDir "$env:RUNNER_TEMP/opencv-build" `
+            -InstallDir "$env:RUNNER_TEMP/opencv-install" `
+            -SmokeBuildDir "$env:RUNNER_TEMP/opencv-smoke"
+
+      - name: Package libraries and write size report
+        id: package
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ matrix.artifact }}
+          OPENCV_TARGET: ${{ matrix.target }}
+        run: |
+          python scripts/opencv/package_artifact.py \
+            --install "$RUNNER_TEMP/opencv-install" \
+            --source "$GITHUB_WORKSPACE/.opencv-src" \
+            --output "$GITHUB_WORKSPACE/artifacts" \
+            --name "$ARTIFACT_NAME" \
+            --version "$OPENCV_VERSION" \
+            --commit "$OPENCV_COMMIT" \
+            --target "$OPENCV_TARGET" \
+            --modules "$OPENCV_MODULES"
+
+      - name: Upload static OpenCV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ env.OPENCV_VERSION }}
+          path: |
+            artifacts/${{ matrix.artifact }}-${{ env.OPENCV_VERSION }}.zip
+            artifacts/${{ matrix.artifact }}-${{ env.OPENCV_VERSION }}.zip.sha256
+            artifacts/${{ matrix.artifact }}-${{ env.OPENCV_VERSION }}-size-report.md
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
