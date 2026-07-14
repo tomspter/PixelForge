@@ -1,0 +1,330 @@
+name: Build minimal static OpenCV
+
+on:
+  workflow_dispatch:
+    inputs:
+      opencv_version:
+        description: OpenCV version
+        required: true
+        default: "4.13.0"
+
+  push:
+    tags:
+      - "opencv-*"
+
+permissions:
+  contents: read
+
+env:
+  DEFAULT_OPENCV_VERSION: "4.13.0"
+
+jobs:
+  build-linux:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Resolve OpenCV version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.opencv_version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${DEFAULT_OPENCV_VERSION}"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout OpenCV
+        uses: actions/checkout@v4
+        with:
+          repository: opencv/opencv
+          ref: ${{ steps.version.outputs.value }}
+          path: opencv
+          fetch-depth: 1
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake \
+            -S opencv \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_LIST=core,imgproc,photo \
+            -DBUILD_opencv_world=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PERF_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_DOCS=OFF \
+            -DBUILD_opencv_apps=OFF \
+            -DBUILD_JAVA=OFF \
+            -DBUILD_opencv_python2=OFF \
+            -DBUILD_opencv_python3=OFF \
+            -DWITH_CUDA=OFF \
+            -DWITH_OPENCL=OFF \
+            -DWITH_IPP=OFF \
+            -DWITH_TBB=OFF \
+            -DWITH_OPENMP=OFF \
+            -DWITH_FFMPEG=OFF \
+            -DWITH_GSTREAMER=OFF \
+            -DWITH_GTK=OFF \
+            -DWITH_QT=OFF \
+            -DWITH_V4L=OFF
+
+      - name: Build and install
+        shell: bash
+        run: |
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Show installed libraries
+        shell: bash
+        run: |
+          find install -type f \
+            \( -name "*.a" -o -name "*.so*" -o -name "OpenCVConfig.cmake" \) \
+            -print
+
+          du -sh install
+
+      - name: Create archive
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          ARCHIVE="opencv-${VERSION}-linux-x86_64-static.tar.gz"
+
+          tar \
+            --dereference \
+            -czf "$ARCHIVE" \
+            -C install .
+
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-${{ steps.version.outputs.value }}-linux-x86_64-static
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
+
+
+  build-windows:
+    name: Windows x86_64
+    runs-on: windows-2022
+
+    steps:
+      - name: Resolve OpenCV version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.opencv_version }}"
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = $env:DEFAULT_OPENCV_VERSION
+          }
+
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout OpenCV
+        uses: actions/checkout@v4
+        with:
+          repository: opencv/opencv
+          ref: ${{ steps.version.outputs.value }}
+          path: opencv
+          fetch-depth: 1
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake `
+            -S opencv `
+            -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_LIST=core,imgproc,photo `
+            -DBUILD_opencv_world=OFF `
+            -DBUILD_TESTS=OFF `
+            -DBUILD_PERF_TESTS=OFF `
+            -DBUILD_EXAMPLES=OFF `
+            -DBUILD_DOCS=OFF `
+            -DBUILD_opencv_apps=OFF `
+            -DBUILD_JAVA=OFF `
+            -DBUILD_opencv_python2=OFF `
+            -DBUILD_opencv_python3=OFF `
+            -DWITH_CUDA=OFF `
+            -DWITH_OPENCL=OFF `
+            -DWITH_IPP=OFF `
+            -DWITH_TBB=OFF `
+            -DWITH_OPENMP=OFF `
+            -DWITH_FFMPEG=OFF `
+            -DWITH_GSTREAMER=OFF `
+            -DWITH_MSMF=OFF `
+            -DWITH_DSHOW=OFF
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake `
+            --build build `
+            --config Release `
+            --parallel
+
+      - name: Install
+        shell: pwsh
+        run: |
+          cmake `
+            --install build `
+            --config Release
+
+      - name: Show installed libraries
+        shell: pwsh
+        run: |
+          Get-ChildItem install -Recurse -File |
+            Where-Object {
+              $_.Extension -in ".lib", ".dll", ".cmake"
+            } |
+            Select-Object FullName, Length
+
+          $size = (
+            Get-ChildItem install -Recurse -File |
+            Measure-Object Length -Sum
+          ).Sum
+
+          Write-Host ("Installed size: {0:N2} MB" -f ($size / 1MB))
+
+      - name: Create archive
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.value }}"
+          $archive = "opencv-$version-windows-x86_64-static.zip"
+
+          Compress-Archive `
+            -Path "install\*" `
+            -DestinationPath $archive `
+            -CompressionLevel Optimal
+
+          "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-${{ steps.version.outputs.value }}-windows-x86_64-static
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
+
+
+  build-macos-arm64:
+    name: macOS arm64
+    runs-on: macos-14
+
+    steps:
+      - name: Resolve OpenCV version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.opencv_version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${DEFAULT_OPENCV_VERSION}"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout OpenCV
+        uses: actions/checkout@v4
+        with:
+          repository: opencv/opencv
+          ref: ${{ steps.version.outputs.value }}
+          path: opencv
+          fetch-depth: 1
+
+      - name: Install Ninja
+        shell: bash
+        run: |
+          brew install ninja
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake \
+            -S opencv \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_LIST=core,imgproc,photo \
+            -DBUILD_opencv_world=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PERF_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_DOCS=OFF \
+            -DBUILD_opencv_apps=OFF \
+            -DBUILD_JAVA=OFF \
+            -DBUILD_opencv_python2=OFF \
+            -DBUILD_opencv_python3=OFF \
+            -DWITH_CUDA=OFF \
+            -DWITH_OPENCL=OFF \
+            -DWITH_IPP=OFF \
+            -DWITH_TBB=OFF \
+            -DWITH_OPENMP=OFF \
+            -DWITH_FFMPEG=OFF \
+            -DWITH_GSTREAMER=OFF \
+            -DWITH_AVFOUNDATION=OFF \
+            -DWITH_QT=OFF
+
+      - name: Build and install
+        shell: bash
+        run: |
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Show architectures and size
+        shell: bash
+        run: |
+          find install -type f -name "*.a" -print
+
+          while IFS= read -r library; do
+            echo "$library"
+            lipo -info "$library" || true
+          done < <(find install -type f -name "*.a")
+
+          du -sh install
+
+      - name: Create archive
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          ARCHIVE="opencv-${VERSION}-macos-arm64-static.tar.gz"
+
+          tar \
+            --dereference \
+            -czf "$ARCHIVE" \
+            -C install .
+
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-${{ steps.version.outputs.value }}-macos-arm64-static
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
