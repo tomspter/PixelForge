@@ -12,9 +12,19 @@ use std::{
     fs,
     io::{Cursor, ErrorKind},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
+use tauri::{Emitter, Manager};
 
 type AppResult<T> = Result<T, String>;
+
+struct ExitGuard(AtomicBool);
+
+#[tauri::command]
+fn confirm_app_exit(app: tauri::AppHandle, guard: tauri::State<'_, ExitGuard>) {
+    guard.0.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
 
 fn io_error_message(action: &str, error: &std::io::Error) -> String {
     if matches!(error.raw_os_error(), Some(28 | 112)) {
@@ -858,7 +868,8 @@ fn safe_name(s: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .manage(ExitGuard(AtomicBool::new(false)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
@@ -870,10 +881,24 @@ pub fn run() {
             render_clear_patch,
             render_text_patch,
             render_preview,
-            generate_batch
+            generate_batch,
+            confirm_app_exit
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running application");
+        .build(tauri::generate_context!())
+        .expect("error while building application");
+
+    app.run(|handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            let guard = handle.state::<ExitGuard>();
+            if guard.0.swap(false, Ordering::SeqCst) {
+                return;
+            }
+            if let Some(window) = handle.get_webview_window("main") {
+                api.prevent_exit();
+                let _ = window.emit("app-exit-requested", ());
+            }
+        }
+    });
 }
 
 #[cfg(test)]

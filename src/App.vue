@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { BoxSelect, Eye, FileImage, FolderOpen, Grid2X2, MousePointer2, Play, Save, ZoomIn, ZoomOut } from '@lucide/vue'
+import { invoke, isTauri } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import appIcon from '../src-tauri/icons/128x128.png'
 import EditorCanvas from './components/EditorCanvas.vue'
 import FieldList from './components/FieldList.vue'
@@ -9,10 +11,14 @@ import BatchDrawer from './components/BatchDrawer.vue'
 import PreviewModal from './components/PreviewModal.vue'
 import GenerationToast from './components/GenerationToast.vue'
 import ThemeController from './components/ThemeController.vue'
+import UnsavedChangesDialog from './components/UnsavedChangesDialog.vue'
 import { useFeedbackStore } from './stores/feedback'
 import { usePreviewStore } from './stores/preview'
 import { useTemplateStore } from './stores/template'
-const store = useTemplateStore(); const preview = usePreviewStore(); const feedback = useFeedbackStore(); const batchOpen = ref(false)
+import { useUnsavedChangesStore } from './stores/unsavedChanges'
+const store = useTemplateStore(); const preview = usePreviewStore(); const feedback = useFeedbackStore(); const unsaved = useUnsavedChangesStore(); const batchOpen = ref(false)
+let unlistenClose: (() => void) | undefined
+let unlistenExit: (() => void) | undefined
 const statusDotClass = computed(() => ({
   error: 'status-error ring-1 ring-error/35',
   warning: 'status-warning ring-1 ring-warning/35',
@@ -25,7 +31,17 @@ const editingText = (target: EventTarget | null) => target instanceof HTMLElemen
 const steppedZoom = (value: number, delta: number, min: number) => Math.min(4, Math.max(min, Math.round((value + delta) * 100) / 100))
 function adjustCanvasZoom(delta: number) { store.zoom = steppedZoom(store.zoom, delta, .1) }
 function adjustPreviewZoom(delta: number) { preview.previewZoom = steppedZoom(preview.previewZoom, delta, .05) }
+async function confirmApplicationClose() {
+  if (!store.dirty) return true
+  const choice = await unsaved.confirm({
+    title: '保存更改后再关闭应用？',
+    message: `“${store.document?.name ?? '当前模板'}”包含尚未保存的修改。关闭应用后，这些修改将无法恢复。`,
+    continueLabel: '关闭',
+  })
+  return choice !== 'cancel'
+}
 function onShortcut(event: KeyboardEvent) {
+  if (unsaved.request) return
   if (editingText(event.target)) return
   const key = event.key.toLowerCase(); const command = event.metaKey || event.ctrlKey
   const zoomDirection = key === '+' || event.code === 'NumpadAdd' ? 1 : key === '-' || event.code === 'NumpadSubtract' ? -1 : 0
@@ -46,8 +62,32 @@ function onShortcut(event: KeyboardEvent) {
   const directions: Record<string, [number, number]> = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] }
   if (directions[key] && store.tool === 'select' && store.selected) { event.preventDefault(); const [x, y] = directions[key]; const step = event.shiftKey ? 10 : 1; store.nudgeSelected(x * step, y * step) }
 }
-onMounted(() => window.addEventListener('keydown', onShortcut))
-onBeforeUnmount(() => window.removeEventListener('keydown', onShortcut))
+onMounted(async () => {
+  window.addEventListener('keydown', onShortcut)
+  if (!isTauri()) return
+  const appWindow = getCurrentWindow()
+  try {
+    unlistenClose = await appWindow.onCloseRequested(async event => {
+      if (!store.dirty) return
+      event.preventDefault()
+      if (await confirmApplicationClose()) {
+        try { await appWindow.destroy() }
+        catch (error) { feedback.reportError('关闭应用失败', error) }
+      }
+    })
+    unlistenExit = await appWindow.listen('app-exit-requested', async () => {
+      if (await confirmApplicationClose()) {
+        try { await invoke('confirm_app_exit') }
+        catch (error) { feedback.reportError('退出应用失败', error) }
+      }
+    })
+  } catch (error) { feedback.reportError('无法启用未保存更改保护', error) }
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onShortcut)
+  unlistenClose?.()
+  unlistenExit?.()
+})
 </script>
 <template>
   <main class="flex h-screen flex-col overflow-hidden bg-base-100 text-base-content">
@@ -74,6 +114,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onShortcut))
       <BatchDrawer :open="batchOpen" @close="batchOpen = false" />
       <PreviewModal />
       <GenerationToast />
+      <UnsavedChangesDialog />
     </div>
     <footer role="status" aria-live="polite" class="flex h-6 shrink-0 items-center border-t border-base-300 bg-neutral px-3 font-mono text-[9px] text-base-content/35"><span class="status status-sm mr-2 shrink-0" :class="statusDotClass" :aria-label="statusLabel"/><span class="min-w-0 truncate font-medium">{{ feedback.notice }}</span><span class="ml-auto shrink-0 pl-4 opacity-60">{{ store.document ? `${store.document.background.width} × ${store.document.background.height} px · ${store.document.fields.length} 字段` : '等待导入' }}</span></footer>
   </main>

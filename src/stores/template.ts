@@ -6,9 +6,11 @@ import type { ClearMode, FieldKind, Rect, TemplateDocument, TemplateField } from
 import { makeField } from '../types/template'
 import { localDateTimeNow } from '../utils/dateTime'
 import { useFeedbackStore } from './feedback'
+import { useUnsavedChangesStore } from './unsavedChanges'
 
 export const useTemplateStore = defineStore('template', () => {
   const feedback = useFeedbackStore()
+  const unsaved = useUnsavedChangesStore()
   const document = ref<TemplateDocument | null>(null)
   const selectedId = ref<string | null>(null)
   const zoom = ref(1)
@@ -165,11 +167,20 @@ export const useTemplateStore = defineStore('template', () => {
     if (!isTauri()) { feedback.setNotice('请在桌面应用中导入本地图片', 'warning'); return }
     const path = await open({ multiple: false, filters: [{ name: '图片文件', extensions: ['png', 'jpg', 'jpeg'] }] })
     if (!path) return
+    if (dirty.value) {
+      const choice = await unsaved.confirm({
+        title: '保存当前模板后再导入图片？',
+        message: `导入新图片将替换“${document.value?.name ?? '当前模板'}”。未保存的字段、位置和样式设置将无法恢复。`,
+        continueLabel: '导入',
+      })
+      if (choice === 'cancel') return
+    }
     feedback.setNotice('正在读取图片…', 'working')
     try {
       const meta = await invoke<{ width: number; height: number }>('inspect_image', { path })
       const now = new Date().toISOString()
       setDocument({ schemaVersion: 1, id: crypto.randomUUID(), name: String(path).split(/[\\/]/).pop()?.replace(/\.(png|jpe?g)$/i, '') ?? '未命名模板', background: { path: String(path), ...meta }, fields: [], createdAt: now, updatedAt: now })
+      dirty.value = true
       feedback.setNotice(`已载入 ${meta.width} × ${meta.height} 图片`, 'success')
     } catch (error) { feedback.reportError('图片导入失败', error) }
   }
@@ -177,22 +188,34 @@ export const useTemplateStore = defineStore('template', () => {
     if (!isTauri()) return
     const path = await open({ multiple: false, filters: [{ name: 'PNG 模板', extensions: ['json'] }] })
     if (!path) return
+    if (dirty.value) {
+      const choice = await unsaved.confirm({
+        title: '保存当前模板后再打开其他模板？',
+        message: `打开其他模板将关闭“${document.value?.name ?? '当前模板'}”。当前尚未保存的修改将无法恢复。`,
+        continueLabel: '打开',
+      })
+      if (choice === 'cancel') return
+    }
     feedback.setNotice('正在打开模板…', 'working')
     try {
       setDocument(await invoke('load_template', { path }))
       feedback.setNotice('模板已打开', 'success')
     } catch (error) { feedback.reportError('模板打开失败', error) }
   }
-  async function saveTemplate() {
-    if (!document.value || !isTauri()) return
+  async function saveTemplate(): Promise<boolean> {
+    if (!document.value || !isTauri()) return false
     const path = await save({ defaultPath: `${document.value.name}.pngtpl.json`, filters: [{ name: 'PNG 模板', extensions: ['json'] }] })
-    if (!path) return
+    if (!path) return false
     feedback.setNotice('正在保存模板…', 'working')
     try {
       document.value.updatedAt = new Date().toISOString()
       await invoke('save_template', { path, template: document.value })
       dirty.value = false; feedback.setNotice('模板已保存', 'success')
-    } catch (error) { feedback.reportError('模板保存失败', error) }
+      return true
+    } catch (error) {
+      feedback.reportError('模板保存失败', error)
+      return false
+    }
   }
   return { document, selectedId, selected, backgroundUrl, zoom, tool, dirty, setDocument, addField, removeSelected, duplicateSelected, nudgeSelected, setFieldEnabled, setFieldKind, reorderFields, updateFieldRect, updateFieldTransform, setRotation, setRotationEnabled, importBackground, openTemplate, saveTemplate }
 })
