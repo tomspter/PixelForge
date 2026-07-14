@@ -156,7 +156,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON `
             -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_LIST=core,imgproc,photo `
+            "-DBUILD_LIST=core,imgproc,photo" `
             -DBUILD_opencv_world=OFF `
             -DBUILD_TESTS=OFF `
             -DBUILD_PERF_TESTS=OFF `
@@ -325,6 +325,107 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: opencv-${{ steps.version.outputs.value }}-macos-arm64-static
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          compression-level: 0
+
+
+  build-macos-x86_64:
+    name: macOS x86_64
+    runs-on: macos-15-intel
+
+    steps:
+      - name: Resolve OpenCV version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.opencv_version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${DEFAULT_OPENCV_VERSION}"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout OpenCV
+        uses: actions/checkout@v4
+        with:
+          repository: opencv/opencv
+          ref: ${{ steps.version.outputs.value }}
+          path: opencv
+          fetch-depth: 1
+
+      - name: Install Ninja
+        shell: bash
+        run: |
+          brew install ninja
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake \
+            -S opencv \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_LIST=core,imgproc,photo \
+            -DBUILD_opencv_world=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PERF_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_DOCS=OFF \
+            -DBUILD_opencv_apps=OFF \
+            -DBUILD_JAVA=OFF \
+            -DBUILD_opencv_python2=OFF \
+            -DBUILD_opencv_python3=OFF \
+            -DWITH_CUDA=OFF \
+            -DWITH_OPENCL=OFF \
+            -DWITH_IPP=OFF \
+            -DWITH_TBB=OFF \
+            -DWITH_OPENMP=OFF \
+            -DWITH_FFMPEG=OFF \
+            -DWITH_GSTREAMER=OFF \
+            -DWITH_AVFOUNDATION=OFF \
+            -DWITH_QT=OFF
+
+      - name: Build and install
+        shell: bash
+        run: |
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Show architectures and size
+        shell: bash
+        run: |
+          find install -type f -name "*.a" -print
+
+          while IFS= read -r library; do
+            echo "$library"
+            lipo -info "$library" || true
+          done < <(find install -type f -name "*.a")
+
+          du -sh install
+
+      - name: Create archive
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          ARCHIVE="opencv-${VERSION}-macos-x86_64-static.tar.gz"
+
+          tar \
+            --dereference \
+            -czf "$ARCHIVE" \
+            -C install .
+
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-${{ steps.version.outputs.value }}-macos-x86_64-static
           path: ${{ env.ARCHIVE }}
           if-no-files-found: error
           compression-level: 0
